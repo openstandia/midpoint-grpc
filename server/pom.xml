@@ -40,15 +40,8 @@
             <scope>compile</scope>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
             <groupId>com.evolveum.midpoint.gui</groupId>
             <artifactId>admin-gui</artifactId>
-            <type>jar</type>
-            <classifier>classes</classifier>
             <scope>provided</scope>
         </dependency>
 

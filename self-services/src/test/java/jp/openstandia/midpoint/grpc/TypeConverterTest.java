@@ -1,13 +1,23 @@
 package jp.openstandia.midpoint.grpc;
 
+import com.evolveum.midpoint.prism.PrismService;
+import com.evolveum.midpoint.prism.impl.PrismContextImpl;
+import com.evolveum.midpoint.prism.impl.schema.SchemaRegistryImpl;
 import com.evolveum.midpoint.prism.path.ItemName;
 import com.evolveum.midpoint.prism.polystring.PolyString;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.UserType;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class TypeConverterTest {
+
+    @BeforeEach
+    void before() {
+        PrismContextImpl prismContext = PrismContextImpl.create(new SchemaRegistryImpl());
+        PrismService.get().prismContext(prismContext);
+    }
 
     @Test
     public void toItemName() {

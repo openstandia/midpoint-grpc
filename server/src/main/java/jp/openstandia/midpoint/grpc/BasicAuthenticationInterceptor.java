@@ -1,7 +1,8 @@
 package jp.openstandia.midpoint.grpc;
 
-import com.evolveum.midpoint.model.api.AuthenticationEvaluator;
-import com.evolveum.midpoint.model.api.context.PasswordAuthenticationContext;
+import com.evolveum.midpoint.authentication.api.evaluator.AuthenticationEvaluator;
+import com.evolveum.midpoint.authentication.api.evaluator.context.PasswordAuthenticationContext;
+import com.evolveum.midpoint.authentication.impl.FocusAuthenticationResultRecorder;
 import com.evolveum.midpoint.prism.PrismObject;
 import com.evolveum.midpoint.security.api.AuthorizationConstants;
 import com.evolveum.midpoint.security.api.ConnectionEnvironment;
@@ -13,23 +14,24 @@ import com.evolveum.midpoint.xml.ns._public.common.common_3.FocusType;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.UserType;
 import io.grpc.Metadata;
 import io.grpc.Status;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnMissingBean(JWTAuthenticationInterceptor.class)
 public class BasicAuthenticationInterceptor extends AbstractGrpcAuthenticationInterceptor {
 
     private static final Trace LOGGER = TraceManager.getTrace(BasicAuthenticationInterceptor.class);
     private static final String TYPE = "Basic";
 
     @Autowired
-    transient AuthenticationEvaluator<PasswordAuthenticationContext> passwordAuthenticationEvaluator;
+    transient AuthenticationEvaluator<PasswordAuthenticationContext, UsernamePasswordAuthenticationToken> passwordAuthenticationEvaluator;
+
+    @Autowired
+    FocusAuthenticationResultRecorder authenticationRecorder;
 
     @Override
     public String getType() {
@@ -90,10 +92,13 @@ public class BasicAuthenticationInterceptor extends AbstractGrpcAuthenticationIn
 
     private UsernamePasswordAuthenticationToken authenticateUser(ConnectionEnvironment connEnv, String username, String password) {
         LOGGER.debug("Start authenticateUser: {}", username);
+        UsernamePasswordAuthenticationToken token = null;
         try {
             // login session is recorded here
             // TODO Use custom evaluator here because it takes several tens of ms
-            UsernamePasswordAuthenticationToken token = passwordAuthenticationEvaluator.authenticate(connEnv, new PasswordAuthenticationContext(username, password, UserType.class));
+            connEnv.setSequenceIdentifier("grpc");
+            connEnv.setModuleIdentifier("httpBasic");
+            token = passwordAuthenticationEvaluator.authenticate(connEnv, new PasswordAuthenticationContext(username, password, UserType.class));
             return token;
         } catch (AuthenticationException ex) {
             LOGGER.info("Not authenticated. user: {}, reason: {}", username, ex.getMessage());
@@ -102,7 +107,22 @@ public class BasicAuthenticationInterceptor extends AbstractGrpcAuthenticationIn
                     .withCause(ex)
                     .asRuntimeException();
         } finally {
+            writeRecord(connEnv, token, username);
             LOGGER.debug("End authenticateUser: {}", username);
+        }
+    }
+
+    // Based on com.evolveum.midpoint.authentication.impl.filter.SequenceAuditFilter#writeRecord
+    private void writeRecord(ConnectionEnvironment connEnv, UsernamePasswordAuthenticationToken token, String username) {
+        if (token != null) {
+            MidPointPrincipal mpPrincipal = token.getPrincipal() instanceof MidPointPrincipal ? (MidPointPrincipal) token.getPrincipal() : null;
+            boolean isAuthenticated = token.isAuthenticated();
+            if (isAuthenticated) {
+                authenticationRecorder.recordSequenceAuthenticationSuccess(mpPrincipal, connEnv);
+            }
+        } else {
+            authenticationRecorder.recordSequenceAuthenticationFailure(username, null, null,
+                    "invalid_token", connEnv);
         }
     }
 }

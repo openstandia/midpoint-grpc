@@ -49,7 +49,7 @@ public class BuilderWrapper<T> {
     }
 
     public <V> BuilderWrapper<T> nullSafeWithRetrieve(ItemPath path, V value, Task<T, V> t) {
-        if (!SelectorOptions.hasToLoadPath(path, options, !this.hasInclude)) {
+        if (!SelectorOptions.hasToIncludePath(path, options, !this.hasInclude)) {
             return this;
         }
         if (value != null) {

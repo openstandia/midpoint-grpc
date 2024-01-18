@@ -1,9 +1,15 @@
 package jp.openstandia.midpoint.grpc;
 
+import com.evolveum.midpoint.authentication.api.config.MidpointAuthentication;
+import com.evolveum.midpoint.authentication.api.evaluator.AuthenticationEvaluator;
+import com.evolveum.midpoint.authentication.api.evaluator.context.NonceAuthenticationContext;
+import com.evolveum.midpoint.authentication.impl.factory.channel.SelfRegistrationChannelFactory;
 import com.evolveum.midpoint.gui.api.util.WebComponentUtil;
-import com.evolveum.midpoint.model.api.*;
+import com.evolveum.midpoint.model.api.ModelExecuteOptions;
+import com.evolveum.midpoint.model.api.ModelInteractionService;
+import com.evolveum.midpoint.model.api.ModelService;
+import com.evolveum.midpoint.model.api.TaskService;
 import com.evolveum.midpoint.model.api.context.ModelContext;
-import com.evolveum.midpoint.model.api.context.NonceAuthenticationContext;
 import com.evolveum.midpoint.model.impl.ModelCrudService;
 import com.evolveum.midpoint.model.impl.util.ModelImplUtils;
 import com.evolveum.midpoint.prism.*;
@@ -25,10 +31,10 @@ import com.evolveum.midpoint.schema.result.OperationResult;
 import com.evolveum.midpoint.schema.util.LocalizationUtil;
 import com.evolveum.midpoint.schema.util.MiscSchemaUtil;
 import com.evolveum.midpoint.schema.util.ObjectQueryUtil;
+import com.evolveum.midpoint.schema.util.SecurityPolicyUtil;
 import com.evolveum.midpoint.security.api.ConnectionEnvironment;
 import com.evolveum.midpoint.security.api.SecurityContextManager;
 import com.evolveum.midpoint.task.api.Task;
-import com.evolveum.midpoint.task.api.TaskCategory;
 import com.evolveum.midpoint.task.api.TaskManager;
 import com.evolveum.midpoint.util.*;
 import com.evolveum.midpoint.util.exception.*;
@@ -47,7 +53,9 @@ import org.apache.commons.lang3.StringUtils;
 import org.lognet.springboot.grpc.GRpcService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.authentication.*;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import javax.xml.namespace.QName;
 import java.util.*;
@@ -114,7 +122,9 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
     @Autowired
     protected TaskService taskService;
     @Autowired
-    protected AuthenticationEvaluator<NonceAuthenticationContext> nonceAuthenticationEvaluator;
+    protected AuthenticationEvaluator<NonceAuthenticationContext, UsernamePasswordAuthenticationToken> nonceAuthenticationEvaluator;
+    @Autowired
+    protected SelfRegistrationChannelFactory selfRegistrationChannelFactory;
     @Autowired
     protected SecurityContextManager securityContextManager;
     @Autowired
@@ -204,7 +214,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_MODIFY_PROFILE);
 
             String loggedInUser = ctx.principal.getOid();
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             executeChanges(loggedInUser, request.getModificationsList(), modelExecuteOptions, task, parentResult);
 
@@ -482,6 +492,8 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
     }
 
     protected String checkUserNonce(FocusType focus, String nonce, String nonceName, OperationResult parentResult) throws SchemaException {
+        Authentication origAuthentication = SecurityContextHolder.getContext().getAuthentication();
+
         try {
             SecurityPolicyType securityPolicy = resolveSecurityPolicy(focus.asPrismContainer());
             Optional<NonceCredentialsPolicyType> noncePolicy = securityPolicy.getCredentials().getNonce().stream()
@@ -489,9 +501,18 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
                     .findFirst();
 
             ConnectionEnvironment connEnv = ConnectionEnvironment.create(SchemaConstants.CHANNEL_SELF_REGISTRATION_URI);
+            connEnv.setSequenceIdentifier("grpc");
+            connEnv.setModuleIdentifier("nonce");
+
             // Don't call authenticate method here because the user may not yet be active
-            nonceAuthenticationEvaluator.checkCredentials(connEnv, new NonceAuthenticationContext(focus.getName().getOrig(), focus.getClass(),
-                    nonce, noncePolicy.orElse(null)));
+            NonceAuthenticationContext nonceAuthenticationContext = new NonceAuthenticationContext(focus.getName().getOrig(), focus.getClass(),
+                    nonce, Collections.emptyList(), selfRegistrationChannelFactory.createAuthChannel(new AuthenticationSequenceChannelType()));
+            nonceAuthenticationContext.setPolicy(noncePolicy.orElse(null));
+
+            // Since it needs MidpointAuthentication for the authentication, we set dummy authentication
+            SecurityContextHolder.getContext().setAuthentication(new MidpointAuthentication(SecurityPolicyUtil.createDefaultSequence()));
+
+            nonceAuthenticationEvaluator.authenticate(connEnv, nonceAuthenticationContext);
 
             return null;
         } catch (AuthenticationCredentialsNotFoundException e) {
@@ -512,8 +533,37 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
         } catch (AuthenticationException e) {
             LOGGER.error("Unexpected checkUserNonce error. focus: {}, nonceName: {}", focus.getOid(), nonceName, e);
             throw e;
+        } finally {
+            SecurityContextHolder.getContext().setAuthentication(origAuthentication);
         }
     }
+
+//    private boolean checkCredentials(MidPointPrincipal principal, T authnCtx, ConnectionEnvironment connEnv) {
+//
+//        FocusType focusType = principal.getFocus();
+//        CredentialsType credentials = focusType.getCredentials();
+//        if (credentials == null || getCredential(credentials) == null) {
+//            recordModuleAuthenticationFailure(principal.getUsername(), principal, connEnv, getCredentialsPolicy(principal, authnCtx), "no credentials in user");
+//            throw new AuthenticationCredentialsNotFoundException(AuthUtil.generateBadCredentialsMessageKey(SecurityContextHolder.getContext().getAuthentication()));
+//        }
+//
+//        CredentialPolicyType credentialsPolicy = getCredentialsPolicy(principal, authnCtx);
+//
+//        // Lockout
+//        if (isLockedOut(getAuthenticationData(principal, connEnv), credentialsPolicy)) {
+//            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+//            if (auth instanceof MidpointAuthentication) {
+//                ((MidpointAuthentication) auth).setOverLockoutMaxAttempts(true);
+//            }
+//            recordModuleAuthenticationFailure(principal.getUsername(), principal, connEnv, getCredentialsPolicy(principal, authnCtx), "password locked-out");
+//            throw new LockedException("web.security.provider.locked");
+//        }
+//
+//        // Password age
+//        checkPasswordValidityAndAge(connEnv, principal, getCredential(credentials), credentialsPolicy);
+//
+//        return passwordMatches(connEnv, principal, getCredential(credentials), authnCtx);
+//    }
 
     protected SecurityPolicyType resolveSecurityPolicy(PrismObject<UserType> user) {
         SecurityPolicyType securityPolicy = runPrivileged(new Producer<SecurityPolicyType>() {
@@ -526,7 +576,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
                 OperationResult result = new OperationResult(OPERATION_GET_SECURITY_POLICY);
 
                 try {
-                    return modelInteraction.getSecurityPolicy(user, task, result);
+                    return modelInteraction.getSecurityPolicy(user, null, task, result);
                 } catch (CommonException e) {
                     LOGGER.error("Could not retrieve security policy: {}", e.getMessage(), e);
                     return null;
@@ -549,7 +599,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
 
     private void resolveReference(ObjectDelta delta, OperationResult result) {
         try {
-            ModelImplUtils.resolveReferences(delta, repositoryService, false, false, EvaluationTimeType.IMPORT, true, prismContext, result);
+            ModelImplUtils.resolveReferences(delta, repositoryService, false, false, EvaluationTimeType.IMPORT, true, result);
         } catch (SystemException e) {
             StatusRuntimeException exception = Status.INVALID_ARGUMENT
                     .withDescription("invalid_reference")
@@ -641,7 +691,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
 
                 TaskType reqTask = createSingleRecurrenceTask(loggedInUser, "Request assignments - " + UUID.randomUUID().toString(),
                         UserType.COMPLEX_TYPE,
-                        query, delta, createOptions(request.getComment()), TaskCategory.EXECUTE_CHANGES);
+                        query, delta, createOptions(request.getComment()), "ExecuteChanges"); // TaskCategory.EXECUTE_CHANGES);
                 taskOid = runTask(reqTask, task, parentResult);
             }
 
@@ -735,7 +785,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             businessContextType = null;
         }
         // ModelExecuteOptions options = ExecuteChangeOptionsDto.createFromSystemConfiguration().createOptions();
-        ModelExecuteOptions options = ModelExecuteOptions.fromRestOptions(Collections.EMPTY_LIST, prismContext);
+        ModelExecuteOptions options = ModelExecuteOptions.fromRestOptions(Collections.EMPTY_LIST);
         if (options == null) {
             options = new ModelExecuteOptions(prismContext);
         }
@@ -751,14 +801,14 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             Task task = ctx.task;
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_ADD_USER);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             UserTypeMessage message = request.getProfile();
             PrismObject<UserType> user = toPrismObject(prismContext, repositoryService, message);
 
             // To handle error to resolve reference, call resolveReferences here.
             try {
-                ModelImplUtils.resolveReferences(user, repositoryService, false, false, EvaluationTimeType.IMPORT, true, prismContext, parentResult);
+                ModelImplUtils.resolveReferences(user, repositoryService, false, false, EvaluationTimeType.IMPORT, true, parentResult);
             } catch (SystemException e) {
                 StatusRuntimeException exception = Status.INVALID_ARGUMENT
                         .withDescription("invalid_reference")
@@ -795,7 +845,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_MODIFY_USER);
 
             String oid = resolveOid(UserType.class, request.getOid(), request.getName(), task, parentResult);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             executeChanges(oid, request.getModificationsList(), modelExecuteOptions, task, parentResult);
 
@@ -856,10 +906,15 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             final ObjectDelta<UserType> objectDelta = prismContext.deltaFactory().object().createModifyDelta(userOid, delta, UserType.class);
 
             // delta for nonce
-            NonceType nonce = user.getCredentials().getNonce();
-            if (clearNonce && nonce != null) {
-                objectDelta.addModificationDeleteContainer(ItemPath.create(UserType.F_CREDENTIALS, CredentialsType.F_NONCE),
-                        nonce.clone());
+            if (clearNonce) {
+                CredentialsType credentials = user.getCredentials();
+                if (credentials != null) {
+                    NonceType nonce = credentials.getNonce();
+                    if (nonce != null) {
+                        objectDelta.addModificationDeleteContainer(ItemPath.create(UserType.F_CREDENTIALS, CredentialsType.F_NONCE),
+                                nonce.clone());
+                    }
+                }
             }
 
             // delta for lifecycleState
@@ -949,14 +1004,14 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             Task task = ctx.task;
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_ADD_ROLE);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             RoleTypeMessage message = request.getObject();
             PrismObject<RoleType> object = toPrismObject(prismContext, repositoryService, message);
 
             // To handle error to resolve reference, call resolveReferences here.
             try {
-                ModelImplUtils.resolveReferences(object, repositoryService, false, false, EvaluationTimeType.IMPORT, true, prismContext, parentResult);
+                ModelImplUtils.resolveReferences(object, repositoryService, false, false, EvaluationTimeType.IMPORT, true, parentResult);
             } catch (SystemException e) {
                 StatusRuntimeException exception = Status.INVALID_ARGUMENT
                         .withDescription("invalid_reference")
@@ -993,7 +1048,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_GET_ROLE);
 
-            String oid = resolveOid(UserType.class, request.getOid(), request.getName(), task, parentResult);
+            String oid = resolveOid(RoleType.class, request.getOid(), request.getName(), task, parentResult);
 
             List<String> options = request.getOptionsList();
             List<String> include = request.getIncludeList();
@@ -1026,14 +1081,14 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             Task task = ctx.task;
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_ADD_ORG);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             OrgTypeMessage message = request.getObject();
             PrismObject<OrgType> object = toPrismObject(prismContext, repositoryService, message);
 
             // To handle error to resolve reference, call resolveReferences here.
             try {
-                ModelImplUtils.resolveReferences(object, repositoryService, false, false, EvaluationTimeType.IMPORT, true, prismContext, parentResult);
+                ModelImplUtils.resolveReferences(object, repositoryService, false, false, EvaluationTimeType.IMPORT, true, parentResult);
             } catch (SystemException e) {
                 StatusRuntimeException exception = Status.INVALID_ARGUMENT
                         .withDescription("invalid_reference")
@@ -1070,7 +1125,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_GET_ORG);
 
-            String oid = resolveOid(UserType.class, request.getOid(), request.getName(), task, parentResult);
+            String oid = resolveOid(OrgType.class, request.getOid(), request.getName(), task, parentResult);
 
             List<String> options = request.getOptionsList();
             List<String> include = request.getIncludeList();
@@ -1103,14 +1158,14 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             Task task = ctx.task;
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_ADD_SERVICE);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             ServiceTypeMessage message = request.getObject();
             PrismObject<ServiceType> object = toPrismObject(prismContext, repositoryService, message);
 
             // To handle error to resolve reference, call resolveReferences here.
             try {
-                ModelImplUtils.resolveReferences(object, repositoryService, false, false, EvaluationTimeType.IMPORT, true, prismContext, parentResult);
+                ModelImplUtils.resolveReferences(object, repositoryService, false, false, EvaluationTimeType.IMPORT, true, parentResult);
             } catch (SystemException e) {
                 StatusRuntimeException exception = Status.INVALID_ARGUMENT
                         .withDescription("invalid_reference")
@@ -1147,7 +1202,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_GET_SERVICE);
 
-            String oid = resolveOid(UserType.class, request.getOid(), request.getName(), task, parentResult);
+            String oid = resolveOid(ServiceType.class, request.getOid(), request.getName(), task, parentResult);
 
             List<String> options = request.getOptionsList();
             List<String> include = request.getIncludeList();
@@ -1634,7 +1689,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             Task task = ctx.task;
 
             OperationResult parentResult = task.getResult().createSubresult(OPERATION_ADD_USER);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             Class<? extends ObjectType> clazz;
             if (request.hasType()) {
@@ -1650,7 +1705,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             // To handle error to resolve reference, call resolveReferences here.
             try {
                 ModelImplUtils.resolveReferences(object, repositoryService, false,
-                        false, EvaluationTimeType.IMPORT, true, prismContext, parentResult);
+                        false, EvaluationTimeType.IMPORT, true, parentResult);
             } catch (SystemException e) {
                 StatusRuntimeException exception = Status.INVALID_ARGUMENT
                         .withDescription("invalid_reference")
@@ -1696,7 +1751,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             }
 
             String oid = resolveOid(clazz, request.getOid(), request.getName(), task, parentResult);
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList(), prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(request.getOptionsList());
 
             executeChanges(clazz, oid, request.getModificationsList(), modelExecuteOptions, task, parentResult);
 
@@ -1729,7 +1784,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
                 clazz = ObjectTypes.getObjectTypeClass(qname);
             }
 
-            String oid = resolveOid(UserType.class, request.getOid(), request.getName(), task, parentResult);
+            String oid = resolveOid(clazz, request.getOid(), request.getName(), task, parentResult);
 
             List<String> options = request.getOptionsList();
 
@@ -1745,7 +1800,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
                 throw exception;
             }
 
-            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(options, prismContext);
+            ModelExecuteOptions modelExecuteOptions = ModelExecuteOptions.fromRestOptions(options);
 
             try {
                 modelCrudService.deleteObject(clazz, oid, modelExecuteOptions, task, parentResult);
@@ -1790,7 +1845,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
                 throw exception;
             }
 
-            String oid = resolveOid(UserType.class, request.getOid(), request.getName(), task, parentResult);
+            String oid = resolveOid(clazz, request.getOid(), request.getName(), task, parentResult);
             ModelExecuteOptions options = ModelExecuteOptions.createReconcile();
 
             ObjectDelta<? extends FocusType> emptyDelta = prismContext.deltaFactory().object()
@@ -1870,7 +1925,7 @@ public class SelfServiceResource extends SelfServiceResourceGrpc.SelfServiceReso
             if (request.hasRelationalValueSearchQuery()) {
                 RelationalValueSearchQuery query = toRelationalValueSearchQuery(prismContext, request.getRelationalValueSearchQuery());
                 Collection<SelectorOptions<GetOperationOptions>> queryOptions = SelectorOptions.createCollection(prismContext.toUniformPath(LookupTableType.F_ROW), GetOperationOptions.createRetrieve(query));
-                getOptions = GetOperationOptions.merge(prismContext, getOptions, queryOptions);
+                getOptions = GetOperationOptions.merge(getOptions, queryOptions);
             }
 
             PrismObject<LookupTableType> lookupTable = modelCrudService.getObject(LookupTableType.class, oid, getOptions, task, parentResult);

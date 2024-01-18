@@ -3,11 +3,11 @@ package jp.openstandia.midpoint.grpc;
 import com.evolveum.midpoint.schema.constants.SchemaConstants;
 import io.grpc.*;
 import io.grpc.stub.MetadataUtils;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.nio.charset.Charset;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 
@@ -15,18 +15,50 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @ExtendWith(MidPointGrpcTestRunner.class)
 class SelfServiceResourceITest {
-    static ManagedChannel channel;
+    private static ManagedChannel channel;
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub defaultUserStub;
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub defaultServiceAccountStub;
+
+    private static final String GRPC_SERVICE_ACCOUNT_NAME = "grpc-service-account";
+    private static final String GRPC_SERVICE_ROLE_NAME = "grpc-service-role";
+    private static String GRPC_SERVICE_ROLE_OID = null;
+    private static final String DEFAULT_TEST_USERNAME = "defaultUser001";
 
     @BeforeAll
     static void init() {
         channel = ManagedChannelBuilder.forAddress("localhost", 6565)
                 .usePlaintext()
                 .build();
+
+        // Add gRPC service account and role
+        addGrpcServiceAccount(GRPC_SERVICE_ACCOUNT_NAME, "password");
+        defaultUserStub = newStubWithSwitchUserByUsername(GRPC_SERVICE_ACCOUNT_NAME, "password", DEFAULT_TEST_USERNAME, true);
+        defaultServiceAccountStub = newStub(GRPC_SERVICE_ACCOUNT_NAME, "password", true);
     }
 
     @AfterAll
     static void cleanup() {
+        // Cleanup
+        // Delete gRPC service account and role
+        deleteObject(DefaultObjectType.USER_TYPE, GRPC_SERVICE_ACCOUNT_NAME);
+        deleteObject(DefaultObjectType.ROLE_TYPE, GRPC_SERVICE_ROLE_NAME);
+
         channel.shutdownNow();
+    }
+
+    @BeforeEach
+    void beforeMethod() {
+        // Add default test user
+        addUser(DEFAULT_TEST_USERNAME, "DefaultUser001",
+                "00000000-0000-0000-0000-000000000008" // End User
+        );
+    }
+
+    @AfterEach
+    void afterMethod() {
+        // Cleanup
+        // Delete default test user
+        deleteObject(DefaultObjectType.USER_TYPE, DEFAULT_TEST_USERNAME);
     }
 
     @Test
@@ -243,36 +275,18 @@ class SelfServiceResourceITest {
 
     @Test
     void getSelf() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         GetSelfRequest request = GetSelfRequest.newBuilder()
                 .build();
 
-        GetSelfResponse response = stub.getSelf(request);
+        GetSelfResponse response = defaultUserStub.getSelf(request);
         UserTypeMessage user = response.getProfile();
 
-        assertEquals("Administrator", user.getFamilyName().getOrig());
-        assertEquals("administrator", user.getFamilyName().getNorm());
+        assertEquals("DefaultUser001", user.getFamilyName().getOrig());
+        assertEquals("defaultuser001", user.getFamilyName().getNorm());
     }
 
     @Test
     void modifyProfile() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         ModifyProfileRequest request = ModifyProfileRequest.newBuilder()
                 .addModifications(
                         UserItemDeltaMessage.newBuilder()
@@ -282,58 +296,38 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        stub.modifyProfile(request);
+        defaultUserStub.modifyProfile(request);
+
+        assertEquals("Foo", defaultUserStub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getAdditionalName().getOrig());
     }
 
     @Test
     void updateCredential() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         UpdateCredentialRequest request = UpdateCredentialRequest.newBuilder()
-                .setOld("5ecr3t")
+                .setOld("password")
+                .setNew("newpassword")
+                .build();
+
+        defaultUserStub.updateCredential(request);
+
+        // Back to original password
+        request = UpdateCredentialRequest.newBuilder()
+                .setOld("newpassword")
                 .setNew("password")
                 .build();
 
-        stub.updateCredential(request);
-
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:password".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
-        // Back to original password by forceUpdateCredential
-        ForceUpdateCredentialRequest forceReq = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("5ecr3t")
-                .build();
-
-        stub.forceUpdateCredential(forceReq);
+        defaultUserStub.updateCredential(request);
     }
 
     @Test
     void passwordPolicyErrorWithSingleError() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         UpdateCredentialRequest request = UpdateCredentialRequest.newBuilder()
-                .setOld("5ecr3t")
+                .setOld("password")
                 .setNew("123")
                 .build();
 
         try {
-            stub.updateCredential(request);
+            defaultUserStub.updateCredential(request);
             fail("Should be thrown Exception of password policy error");
         } catch (StatusRuntimeException e) {
             assertEquals(Status.Code.INVALID_ARGUMENT, e.getStatus().getCode());
@@ -374,22 +368,13 @@ class SelfServiceResourceITest {
 
     @Test
     void passwordPolicyErrorWithMultipleError() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         UpdateCredentialRequest request = UpdateCredentialRequest.newBuilder()
-                .setOld("5ecr3t")
+                .setOld("password")
                 .setNew("1111")
                 .build();
 
         try {
-            stub.updateCredential(request);
+            defaultUserStub.updateCredential(request);
             fail("Should be thrown Exception of password policy error");
         } catch (StatusRuntimeException e) {
             assertEquals(Status.Code.INVALID_ARGUMENT, e.getStatus().getCode());
@@ -432,70 +417,43 @@ class SelfServiceResourceITest {
 
     @Test
     void forceUpdateCredential() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Force update password
         ForceUpdateCredentialRequest request = ForceUpdateCredentialRequest.newBuilder()
+                .setNew("newpassword")
+                .build();
+
+        defaultUserStub.forceUpdateCredential(request);
+
+        // Check the password was changed
+        try {
+            UpdateCredentialRequest updateCredentialRequest = UpdateCredentialRequest.newBuilder()
+                    .setOld("password")
+                    .setNew("foobar")
+                    .build();
+            defaultUserStub.updateCredential(updateCredentialRequest);
+            fail("Password wasn't changed");
+        } catch (StatusRuntimeException e) {
+            assertEquals(Status.INVALID_ARGUMENT.getCode(), e.getStatus().getCode());
+            assertEquals("invalid_credential", e.getStatus().getDescription());
+        }
+
+        // Force update password again
+        request = ForceUpdateCredentialRequest.newBuilder()
+                .setNew("newpassword2")
+                .build();
+
+        defaultUserStub.forceUpdateCredential(request);
+
+        // Check the password was changed
+        UpdateCredentialRequest updateCredentialRequest = UpdateCredentialRequest.newBuilder()
+                .setOld("newpassword2")
                 .setNew("password")
                 .build();
-
-        stub.forceUpdateCredential(request);
-
-        // Check the password was changed
-        try {
-            stub.getSelf(GetSelfRequest.newBuilder().build());
-            fail("Password wasn't changed");
-        } catch (StatusRuntimeException e) {
-            assertEquals(Status.UNAUTHENTICATED.getCode(), e.getStatus().getCode());
-        }
-
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:password".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
-        // Back to original password by forceUpdateCredential
-        ForceUpdateCredentialRequest forceReq = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("5ecr3t")
-                .build();
-
-        stub.forceUpdateCredential(forceReq);
-
-        // Check the password was changed
-        try {
-            stub.getSelf(GetSelfRequest.newBuilder().build());
-            fail("Password wasn't changed");
-        } catch (StatusRuntimeException e) {
-            assertEquals(Status.UNAUTHENTICATED.getCode(), e.getStatus().getCode());
-        }
-
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
-        // Check auth with new password
-        stub.getSelf(GetSelfRequest.newBuilder().build());
+        defaultUserStub.updateCredential(updateCredentialRequest);
     }
 
     @Test
     void forceUpdateCredentialWithNonceClear() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Save nonce to the user
         ModifyProfileRequest modifyProfileRequest = ModifyProfileRequest.newBuilder()
                 .addModifications(
@@ -506,34 +464,34 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        stub.modifyProfile(modifyProfileRequest);
+        defaultUserStub.modifyProfile(modifyProfileRequest);
 
         // Force update password
         ForceUpdateCredentialRequest request = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("password")
+                .setNew("newpassword")
                 .build();
 
-        stub.forceUpdateCredential(request);
+        defaultUserStub.forceUpdateCredential(request);
 
         // Check the password was changed
         try {
-            stub.getSelf(GetSelfRequest.newBuilder().build());
+            UpdateCredentialRequest updateCredentialRequest = UpdateCredentialRequest.newBuilder()
+                    .setOld("password")
+                    .setNew("newpassword")
+                    .build();
+            defaultUserStub.updateCredential(updateCredentialRequest);
             fail("Password wasn't changed");
         } catch (StatusRuntimeException e) {
-            assertEquals(Status.UNAUTHENTICATED.getCode(), e.getStatus().getCode());
+            assertEquals(Status.INVALID_ARGUMENT.getCode(), e.getStatus().getCode());
+            assertEquals("invalid_credential", e.getStatus().getDescription());
         }
-
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:password".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
 
         // Check nonce isn't cleared yet
         CheckNonceRequest checkNonceRequest = CheckNonceRequest.newBuilder()
                 .setNonce("123456")
                 .build();
 
-        CheckNonceResponse checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        CheckNonceResponse checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -542,27 +500,27 @@ class SelfServiceResourceITest {
 
         // Back to original password with clear nonce and active
         ForceUpdateCredentialRequest forceReq = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("5ecr3t")
+                .setNew("password")
                 .setClearNonce(true)
                 .build();
 
-        stub.forceUpdateCredential(forceReq);
+        defaultUserStub.forceUpdateCredential(forceReq);
 
         // Check the password was changed
         try {
-            stub.getSelf(GetSelfRequest.newBuilder().build());
+            UpdateCredentialRequest updateCredentialRequest = UpdateCredentialRequest.newBuilder()
+                    .setOld("newpassword")
+                    .setNew("password")
+                    .build();
+            defaultUserStub.updateCredential(updateCredentialRequest);
             fail("Password wasn't changed");
         } catch (StatusRuntimeException e) {
-            assertEquals(Status.UNAUTHENTICATED.getCode(), e.getStatus().getCode());
+            assertEquals(Status.INVALID_ARGUMENT.getCode(), e.getStatus().getCode());
+            assertEquals("invalid_credential", e.getStatus().getDescription());
         }
 
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Check nonce was cleared
-        checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -571,18 +529,43 @@ class SelfServiceResourceITest {
     }
 
     @Test
-    void forceUpdateCredentialWithNonceClearAndActive() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
+    void forceUpdateCredentialWithNonceClearForNoCredentialsUser() throws Exception {
+        // Add test user without credentials
+        AddUserRequest addUserRequest = AddUserRequest.newBuilder()
+                .setProfile(UserTypeMessage.newBuilder()
+                        .setName(PolyStringMessage.newBuilder().setOrig("user001_no_cred"))
+                )
+                .build();
 
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
+        AddUserResponse response = defaultUserStub.addUser(addUserRequest);
 
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
+        assertNotNull(response.getOid());
 
-        stub = MetadataUtils.attachHeaders(stub, headers);
+        // Switch to the created user
+        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = newDefaultStubWithSwitchUserByOid("user001_no_cred", true);
 
-        // Save nonce to the user
-        ModifyProfileRequest modifyProfileRequest = ModifyProfileRequest.newBuilder()
+        // Force update password with nonce clear
+        ForceUpdateCredentialRequest request = ForceUpdateCredentialRequest.newBuilder()
+                .setNew("password")
+                .setClearNonce(true)
+                .build();
+
+        stub.forceUpdateCredential(request);
+
+        // Cleanup
+
+        // Delete the test user
+        defaultUserStub.deleteObject(DeleteObjectRequest.newBuilder()
+                .setOid(response.getOid())
+                .setObjectType(DefaultObjectType.USER_TYPE)
+                .build());
+    }
+
+    @Test
+    void forceUpdateCredentialWithNonceClearAndActiveByServiceAccount() throws Exception {
+        // Save nonce to the default user
+        ModifyUserRequest modifyUserRequest = ModifyUserRequest.newBuilder()
+                .setName(DEFAULT_TEST_USERNAME)
                 .addModifications(
                         UserItemDeltaMessage.newBuilder()
                                 .setPath("credentials/nonce/value")
@@ -591,34 +574,14 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        stub.modifyProfile(modifyProfileRequest);
+        defaultUserStub.modifyUser(modifyUserRequest);
 
-        // Force update password
-        ForceUpdateCredentialRequest request = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("password")
-                .build();
-
-        stub.forceUpdateCredential(request);
-
-        // Check the password was changed
-        try {
-            stub.getSelf(GetSelfRequest.newBuilder().build());
-            fail("Password wasn't changed");
-        } catch (StatusRuntimeException e) {
-            assertEquals(Status.UNAUTHENTICATED.getCode(), e.getStatus().getCode());
-        }
-
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:password".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
-        // Check nonce isn't cleared yet
+        // Check nonce was saved
         CheckNonceRequest checkNonceRequest = CheckNonceRequest.newBuilder()
                 .setNonce("123456")
                 .build();
 
-        CheckNonceResponse checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        CheckNonceResponse checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -626,32 +589,32 @@ class SelfServiceResourceITest {
         assertTrue(checkNonceResponse.getError().isEmpty());
 
         // Check lifecycleState isn't active yet
-        assertEquals("", stub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
+        assertEquals("", defaultUserStub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
 
-        // Back to original password with clear nonce and active
+        // Force update password with nonce clear and activation
         ForceUpdateCredentialRequest forceReq = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("5ecr3t")
+                .setNew("newpassword")
                 .setClearNonce(true)
                 .setActive(true)
                 .build();
 
-        stub.forceUpdateCredential(forceReq);
+        defaultUserStub.forceUpdateCredential(forceReq);
 
         // Check the password was changed
         try {
-            stub.getSelf(GetSelfRequest.newBuilder().build());
+            UpdateCredentialRequest updateCredentialRequest = UpdateCredentialRequest.newBuilder()
+                    .setOld("password")
+                    .setNew("newpassword")
+                    .build();
+            defaultUserStub.updateCredential(updateCredentialRequest);
             fail("Password wasn't changed");
         } catch (StatusRuntimeException e) {
-            assertEquals(Status.UNAUTHENTICATED.getCode(), e.getStatus().getCode());
+            assertEquals(Status.INVALID_ARGUMENT.getCode(), e.getStatus().getCode());
+            assertEquals("invalid_credential", e.getStatus().getDescription());
         }
 
-        // Update authorization header with new password
-        token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Check nonce was cleared
-        checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -659,33 +622,16 @@ class SelfServiceResourceITest {
         assertEquals("not_found", checkNonceResponse.getError());
 
         // Check lifecycleState was active
-        assertEquals(SchemaConstants.LIFECYCLE_ACTIVE, stub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
-
-        // Clear lifecycleState
-        ModifyProfileRequest profileRequest = ModifyProfileRequest.newBuilder()
-                .addModifications(UserItemDeltaMessage.newBuilder()
-                        .setUserTypePath(DefaultUserTypePath.F_LIFECYCLE_STATE)
-                        .addValuesToDelete(SchemaConstants.LIFECYCLE_ACTIVE))
-                .build();
-        stub.modifyProfile(profileRequest);
+        assertEquals(SchemaConstants.LIFECYCLE_ACTIVE, defaultUserStub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
     }
 
     @Test
     void generateNonce() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         GenerateValueRequest request = GenerateValueRequest.newBuilder()
                 .setValuePolicyOid("00000000-0000-0000-0000-000000000003")
                 .build();
 
-        GenerateValueResponse response = stub.generateValue(request);
+        GenerateValueResponse response = defaultServiceAccountStub.generateValue(request);
 
         System.out.println("Generated nonce: " + response.getValue());
 
@@ -695,39 +641,25 @@ class SelfServiceResourceITest {
 
     @Test
     void checkNonce() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
-        // Add
-        AddUserRequest request = AddUserRequest.newBuilder()
-                .setProfile(UserTypeMessage.newBuilder()
-                        .setName(PolyStringMessage.newBuilder().setOrig("user001"))
-                        .setEmployeeNumber("emp001")
-                        .setLifecycleState("proposed")
+        // Save lifecycle to the default user
+        ModifyUserRequest modifyUserRequest = ModifyUserRequest.newBuilder()
+                .setName(DEFAULT_TEST_USERNAME)
+                .addModifications(
+                        UserItemDeltaMessage.newBuilder()
+                                .setPath("lifecycleState")
+                                .addValuesToReplace("proposed")
+                                .build()
                 )
                 .build();
 
-        AddUserResponse response = stub.addUser(request);
-
-        assertNotNull(response.getOid());
-
-        // Switch to the created user
-        headers.put(Constant.SwitchToPrincipalMetadataKey, response.getOid());
-        headers.put(Constant.RunPrivilegedMetadataKey, "true");
-        stub = MetadataUtils.attachHeaders(stub, headers);
+        defaultUserStub.modifyUser(modifyUserRequest);
 
         // Check nonce when the user doesn't have
         CheckNonceRequest checkNonceRequest = CheckNonceRequest.newBuilder()
                 .setNonce("123456")
                 .build();
 
-        CheckNonceResponse checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        CheckNonceResponse checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -744,10 +676,10 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        stub.modifyProfile(modifyProfileRequest);
+        defaultUserStub.modifyProfile(modifyProfileRequest);
 
         // Check nonce again
-        checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -758,7 +690,7 @@ class SelfServiceResourceITest {
         CheckNonceRequest invalidCheckNonceRequest = CheckNonceRequest.newBuilder()
                 .setNonce("invalid")
                 .build();
-        checkNonceResponse = stub.checkNonce(invalidCheckNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(invalidCheckNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -767,13 +699,13 @@ class SelfServiceResourceITest {
 
         // Update credential
         ForceUpdateCredentialRequest forceUpdateCredentialRequest = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("5ecr3t")
+                .setNew("newpassword")
                 .build();
 
-        stub.forceUpdateCredential(forceUpdateCredentialRequest);
+        defaultUserStub.forceUpdateCredential(forceUpdateCredentialRequest);
 
         // Check nonce isn't cleared yet
-        checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -782,14 +714,14 @@ class SelfServiceResourceITest {
 
         // Update credential again
         UpdateCredentialRequest updateCredentialRequest = UpdateCredentialRequest.newBuilder()
-                .setOld("5ecr3t")
-                .setNew("P@ssw0rd")
+                .setOld("newpassword")
+                .setNew("newpassword2")
                 .build();
 
-        stub.updateCredential(updateCredentialRequest);
+        defaultUserStub.updateCredential(updateCredentialRequest);
 
         // Check nonce isn't cleared yet
-        checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -797,19 +729,19 @@ class SelfServiceResourceITest {
         assertTrue(checkNonceResponse.getError().isEmpty());
 
         // Check lifecycleState isn't active yet
-        assertEquals(SchemaConstants.LIFECYCLE_PROPOSED, stub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
+        assertEquals(SchemaConstants.LIFECYCLE_PROPOSED, defaultUserStub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
 
-        // Update credential again with nonce clearing
+        // Update credential again with nonce clearing and activation
         ForceUpdateCredentialRequest forceUpdateCredentialRequestWithClearNonce = ForceUpdateCredentialRequest.newBuilder()
-                .setNew("5ecr3t")
+                .setNew("password")
                 .setClearNonce(true)
                 .setActive(true)
                 .build();
 
-        stub.forceUpdateCredential(forceUpdateCredentialRequestWithClearNonce);
+        defaultUserStub.forceUpdateCredential(forceUpdateCredentialRequestWithClearNonce);
 
         // Check nonce was cleared
-        checkNonceResponse = stub.checkNonce(checkNonceRequest);
+        checkNonceResponse = defaultUserStub.checkNonce(checkNonceRequest);
 
         System.out.println(checkNonceResponse);
 
@@ -817,13 +749,7 @@ class SelfServiceResourceITest {
         assertEquals("not_found", checkNonceResponse.getError());
 
         // Check lifecycleState was active
-        assertEquals(SchemaConstants.LIFECYCLE_ACTIVE, stub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
-
-        // Delete
-        stub.deleteObject(DeleteObjectRequest.newBuilder()
-                .setOid(response.getOid())
-                .setObjectType(DefaultObjectType.USER_TYPE)
-                .build());
+        assertEquals(SchemaConstants.LIFECYCLE_ACTIVE, defaultUserStub.getSelf(GetSelfRequest.newBuilder().build()).getProfile().getLifecycleState());
     }
 
     @Test
@@ -832,15 +758,6 @@ class SelfServiceResourceITest {
 
     @Test
     void user() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Add
         AddUserRequest request = AddUserRequest.newBuilder()
                 .setProfile(UserTypeMessage.newBuilder()
@@ -849,7 +766,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        AddUserResponse response = stub.addUser(request);
+        AddUserResponse response = defaultServiceAccountStub.addUser(request);
 
         assertNotNull(response.getOid());
 
@@ -858,13 +775,33 @@ class SelfServiceResourceITest {
                 .setOid(response.getOid())
                 .build();
 
-        GetUserResponse res2 = stub.getUser(req2);
+        GetUserResponse res2 = defaultServiceAccountStub.getUser(req2);
 
         assertEquals("user001", res2.getResult().getName().getOrig());
         assertEquals("emp001", res2.getResult().getEmployeeNumber());
 
+        // Modify by name
+        ModifyUserRequest modReq = ModifyUserRequest.newBuilder()
+                .setName("user001")
+                .addModifications(UserItemDeltaMessage.newBuilder()
+                        .setUserTypePath(DefaultUserTypePath.F_NAME)
+                        .addValuesToReplace("user001_mod")
+                )
+                .build();
+
+        defaultServiceAccountStub.modifyUser(modReq);
+
+        // Get by name
+        req2 = GetUserRequest.newBuilder()
+                .setName("user001_mod")
+                .build();
+
+        res2 = defaultServiceAccountStub.getUser(req2);
+
+        assertEquals("emp001", res2.getResult().getEmployeeNumber());
+
         // Search
-        SearchUsersResponse res3 = stub.searchUsers(SearchRequest.newBuilder()
+        SearchUsersResponse res3 = defaultServiceAccountStub.searchUsers(SearchRequest.newBuilder()
                 .setQuery(QueryMessage.newBuilder()
                         .setFilter(ObjectFilterMessage.newBuilder()
                                 .setEq(FilterEntryMessage.newBuilder()
@@ -875,8 +812,10 @@ class SelfServiceResourceITest {
         assertEquals(1, res3.getNumberOfAllResults());
         assertEquals("emp001", res3.getResults(0).getEmployeeNumber());
 
+        // Cleanup
+
         // Delete
-        DeleteObjectResponse res4 = stub.deleteObject(DeleteObjectRequest.newBuilder()
+        DeleteObjectResponse res4 = defaultServiceAccountStub.deleteObject(DeleteObjectRequest.newBuilder()
                 .setOid(response.getOid())
                 .setObjectType(DefaultObjectType.USER_TYPE)
                 .build());
@@ -886,15 +825,6 @@ class SelfServiceResourceITest {
 
     @Test
     void role() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Add
         AddRoleRequest request = AddRoleRequest.newBuilder()
                 .setObject(RoleTypeMessage.newBuilder()
@@ -903,7 +833,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        AddObjectResponse response = stub.addRole(request);
+        AddObjectResponse response = defaultServiceAccountStub.addRole(request);
 
         assertNotNull(response.getOid());
 
@@ -912,13 +842,40 @@ class SelfServiceResourceITest {
                 .setOid(response.getOid())
                 .build();
 
-        GetRoleResponse res2 = stub.getRole(req2);
+        GetRoleResponse res2 = defaultServiceAccountStub.getRole(req2);
 
         assertEquals("role001", res2.getResult().getName().getOrig());
         assertEquals("testRole", res2.getResult().getSubtype(0));
 
+        // Modify by name
+        ModifyObjectRequest modReq = ModifyObjectRequest.newBuilder()
+                .setObjectType(DefaultObjectType.ROLE_TYPE)
+                .setName("role001")
+                .addModifications(ItemDeltaMessage.newBuilder()
+                        .setPath("name")
+                        .addPrismValuesToReplace(PrismValueMessage.newBuilder()
+                                .setProperty(PrismPropertyValueMessage.newBuilder()
+                                        .setPolyString(PolyStringMessage.newBuilder()
+                                                .setOrig("role001_mod")
+                                        )
+                                )
+                        )
+                )
+                .build();
+
+        defaultServiceAccountStub.modifyObject(modReq);
+
+        // Get by name
+        req2 = GetRoleRequest.newBuilder()
+                .setName("role001_mod")
+                .build();
+
+        res2 = defaultServiceAccountStub.getRole(req2);
+
+        assertEquals("role001_mod", res2.getResult().getName().getOrig());
+
         // Search
-        SearchRolesResponse res3 = stub.searchRoles(SearchRequest.newBuilder()
+        SearchRolesResponse res3 = defaultServiceAccountStub.searchRoles(SearchRequest.newBuilder()
                 .setQuery(QueryMessage.newBuilder()
                         .setFilter(ObjectFilterMessage.newBuilder()
                                 .setEq(FilterEntryMessage.newBuilder()
@@ -930,7 +887,7 @@ class SelfServiceResourceITest {
         assertEquals("testRole", res3.getResults(0).getSubtype(0));
 
         // Delete
-        DeleteObjectResponse res4 = stub.deleteObject(DeleteObjectRequest.newBuilder()
+        DeleteObjectResponse res4 = defaultServiceAccountStub.deleteObject(DeleteObjectRequest.newBuilder()
                 .setOid(response.getOid())
                 .setObjectType(DefaultObjectType.ROLE_TYPE)
                 .build());
@@ -940,15 +897,6 @@ class SelfServiceResourceITest {
 
     @Test
     void org() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Add
         AddOrgRequest request = AddOrgRequest.newBuilder()
                 .setObject(OrgTypeMessage.newBuilder()
@@ -958,7 +906,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        AddObjectResponse response = stub.addOrg(request);
+        AddObjectResponse response = defaultServiceAccountStub.addOrg(request);
 
         assertNotNull(response.getOid());
 
@@ -967,13 +915,41 @@ class SelfServiceResourceITest {
                 .setOid(response.getOid())
                 .build();
 
-        GetOrgResponse res2 = stub.getOrg(req2);
+        GetOrgResponse res2 = defaultServiceAccountStub.getOrg(req2);
 
         assertEquals("org001", res2.getResult().getName().getOrig());
         assertEquals(1, res2.getResult().getDisplayOrder());
 
+        // Modify by name
+        ModifyObjectRequest modReq = ModifyObjectRequest.newBuilder()
+                .setObjectType(DefaultObjectType.ORG_TYPE)
+                .setName("org001")
+                .addModifications(ItemDeltaMessage.newBuilder()
+                        .setPath("name")
+                        .addPrismValuesToReplace(PrismValueMessage.newBuilder()
+                                .setProperty(PrismPropertyValueMessage.newBuilder()
+                                        .setPolyString(PolyStringMessage.newBuilder()
+                                                .setOrig("org001_mod")
+                                        )
+                                )
+                        )
+                )
+                .build();
+
+        defaultServiceAccountStub.modifyObject(modReq);
+
+        // Get by name
+        req2 = GetOrgRequest.newBuilder()
+                .setName("org001_mod")
+                .build();
+
+        res2 = defaultServiceAccountStub.getOrg(req2);
+
+        assertEquals("org001_mod", res2.getResult().getName().getOrig());
+        assertEquals(1, res2.getResult().getDisplayOrder());
+
         // Search
-        SearchOrgsResponse res3 = stub.searchOrgs(SearchRequest.newBuilder()
+        SearchOrgsResponse res3 = defaultServiceAccountStub.searchOrgs(SearchRequest.newBuilder()
                 .setQuery(QueryMessage.newBuilder()
                         .setFilter(ObjectFilterMessage.newBuilder()
                                 .setEq(FilterEntryMessage.newBuilder()
@@ -984,9 +960,9 @@ class SelfServiceResourceITest {
         assertEquals(1, res3.getNumberOfAllResults());
         assertEquals(1, res3.getResults(0).getDisplayOrder());
 
-        // Delete
-        DeleteObjectResponse res4 = stub.deleteObject(DeleteObjectRequest.newBuilder()
-                .setOid(response.getOid())
+        // Delete by name
+        DeleteObjectResponse res4 = defaultServiceAccountStub.deleteObject(DeleteObjectRequest.newBuilder()
+                .setName("org001_mod")
                 .setObjectType(DefaultObjectType.ORG_TYPE)
                 .build());
 
@@ -995,15 +971,6 @@ class SelfServiceResourceITest {
 
     @Test
     void service() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Add
         AddServiceRequest request = AddServiceRequest.newBuilder()
                 .setObject(ServiceTypeMessage.newBuilder()
@@ -1013,7 +980,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        AddObjectResponse response = stub.addService(request);
+        AddObjectResponse response = defaultServiceAccountStub.addService(request);
 
         assertNotNull(response.getOid());
 
@@ -1022,13 +989,44 @@ class SelfServiceResourceITest {
                 .setOid(response.getOid())
                 .build();
 
-        GetServiceResponse res2 = stub.getService(req2);
+        GetServiceResponse res2 = defaultServiceAccountStub.getService(req2);
 
         assertEquals("service001", res2.getResult().getName().getOrig());
         assertEquals("https://example.com", res2.getResult().getUrl());
 
+        // Modify by name
+        ModifyObjectRequest modReq = ModifyObjectRequest.newBuilder()
+                .setObjectType(DefaultObjectType.SERVICE_TYPE)
+                .setName("service001")
+                .addModifications(ItemDeltaMessage.newBuilder()
+                        .setItemPath(ItemPathMessage.newBuilder()
+                                .addPath(QNameMessage.newBuilder()
+                                        .setLocalPart("name")
+                                )
+                        )
+                        .addPrismValuesToReplace(PrismValueMessage.newBuilder()
+                                .setProperty(PrismPropertyValueMessage.newBuilder()
+                                        .setPolyString(PolyStringMessage.newBuilder()
+                                                .setOrig("service001_mod")
+                                        )
+                                )
+                        )
+                )
+                .build();
+
+        defaultServiceAccountStub.modifyObject(modReq);
+
+        // Get by name
+        req2 = GetServiceRequest.newBuilder()
+                .setName("service001_mod")
+                .build();
+
+        res2 = defaultServiceAccountStub.getService(req2);
+
+        assertEquals("service001_mod", res2.getResult().getName().getOrig());
+
         // Search
-        SearchServicesResponse res3 = stub.searchServices(SearchRequest.newBuilder()
+        SearchServicesResponse res3 = defaultServiceAccountStub.searchServices(SearchRequest.newBuilder()
                 .setQuery(QueryMessage.newBuilder()
                         .setFilter(ObjectFilterMessage.newBuilder()
                                 .setEq(FilterEntryMessage.newBuilder()
@@ -1040,7 +1038,7 @@ class SelfServiceResourceITest {
         assertEquals("https://example.com", res3.getResults(0).getUrl());
 
         // Delete
-        DeleteObjectResponse res4 = stub.deleteObject(DeleteObjectRequest.newBuilder()
+        DeleteObjectResponse res4 = defaultServiceAccountStub.deleteObject(DeleteObjectRequest.newBuilder()
                 .setOid(response.getOid())
                 .setObjectType(DefaultObjectType.SERVICE_TYPE)
                 .build());
@@ -1049,22 +1047,30 @@ class SelfServiceResourceITest {
     }
 
     @Test
+    void recompute() throws Exception {
+        // Recompute user
+        defaultServiceAccountStub.recomputeObject(RecomputeObjectRequest.newBuilder()
+                .setObjectType(DefaultObjectType.USER_TYPE)
+                .setOid("00000000-0000-0000-0000-000000000002")
+                .build()
+        );
+
+        // Recompute role by name
+        defaultServiceAccountStub.recomputeObject(RecomputeObjectRequest.newBuilder()
+                .setObjectType(DefaultObjectType.ROLE_TYPE)
+                .setName(GRPC_SERVICE_ROLE_NAME)
+                .build()
+        );
+    }
+
+    @Test
     void lookupTable() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // Get with default options
         GetLookupTableRequest req = GetLookupTableRequest.newBuilder()
                 .setName("Languages")
                 .build();
 
-        GetLookupTableResponse res = stub.getLookupTable(req);
+        GetLookupTableResponse res = defaultServiceAccountStub.getLookupTable(req);
 
         assertEquals("00000000-0000-0000-0000-000000000200", res.getResult().getOid());
         assertEquals("1", res.getResult().getVersion());
@@ -1079,7 +1085,7 @@ class SelfServiceResourceITest {
                 .addInclude("row")
                 .build();
 
-        res = stub.getLookupTable(req);
+        res = defaultServiceAccountStub.getLookupTable(req);
 
         assertEquals("00000000-0000-0000-0000-000000000220", res.getResult().getOid());
         assertEquals("1", res.getResult().getVersion());
@@ -1106,7 +1112,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        res = stub.getLookupTable(req);
+        res = defaultServiceAccountStub.getLookupTable(req);
 
         assertEquals("00000000-0000-0000-0000-000000000200", res.getResult().getOid());
         assertEquals("1", res.getResult().getVersion());
@@ -1137,7 +1143,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        res = stub.getLookupTable(req);
+        res = defaultServiceAccountStub.getLookupTable(req);
 
         assertEquals("00000000-0000-0000-0000-000000000200", res.getResult().getOid());
         assertEquals("1", res.getResult().getVersion());
@@ -1198,7 +1204,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        ModifyObjectResponse addRowRes = stub.modifyObject(addRowReq);
+        ModifyObjectResponse addRowRes = defaultServiceAccountStub.modifyObject(addRowReq);
 
         req = GetLookupTableRequest.newBuilder()
                 .setName("Languages")
@@ -1210,7 +1216,7 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        res = stub.getLookupTable(req);
+        res = defaultServiceAccountStub.getLookupTable(req);
 
         rows = res.getResult().getRowList();
         assertEquals(1, rows.size());
@@ -1239,9 +1245,9 @@ class SelfServiceResourceITest {
                 .addOptions("raw")
                 .build();
 
-        ModifyObjectResponse updateRowRes = stub.modifyObject(updateRowReq);
+        ModifyObjectResponse updateRowRes = defaultServiceAccountStub.modifyObject(updateRowReq);
 
-        res = stub.getLookupTable(req);
+        res = defaultServiceAccountStub.getLookupTable(req);
 
         rows = res.getResult().getRowList();
         assertEquals(1, rows.size());
@@ -1267,9 +1273,9 @@ class SelfServiceResourceITest {
                 .addOptions("raw")
                 .build();
 
-        ModifyObjectResponse deleteRowRes = stub.modifyObject(deleteRowReq);
+        ModifyObjectResponse deleteRowRes = defaultServiceAccountStub.modifyObject(deleteRowReq);
 
-        res = stub.getLookupTable(req);
+        res = defaultServiceAccountStub.getLookupTable(req);
 
         rows = res.getResult().getRowList();
         assertEquals(0, rows.size());
@@ -1277,15 +1283,6 @@ class SelfServiceResourceITest {
 
     @Test
     void getSequenceCounter() throws Exception {
-        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
-
-        String token = Base64.getEncoder().encodeToString("Administrator:5ecr3t".getBytes("UTF-8"));
-
-        Metadata headers = new Metadata();
-        headers.put(Constant.AuthorizationMetadataKey, "Basic " + token);
-
-        stub = MetadataUtils.attachHeaders(stub, headers);
-
         // create new SequenceType
         AddObjectRequest newSeqReq = AddObjectRequest.newBuilder()
                 .setType(QNameMessage.newBuilder().setLocalPart("SequenceType"))
@@ -1324,20 +1321,224 @@ class SelfServiceResourceITest {
                 )
                 .build();
 
-        AddObjectResponse addSeqRes = stub.addObject(newSeqReq);
+        AddObjectResponse addSeqRes = defaultServiceAccountStub.addObject(newSeqReq);
 
         // increment
         GetSequenceCounterRequest req = GetSequenceCounterRequest.newBuilder()
                 .setName("Unix UID numbers")
                 .build();
 
-        GetSequenceCounterResponse res = stub.getSequenceCounter(req);
+        GetSequenceCounterResponse res = defaultServiceAccountStub.getSequenceCounter(req);
 
         assertEquals(1001, res.getResult());
 
         // increment
-        res = stub.getSequenceCounter(req);
+        res = defaultServiceAccountStub.getSequenceCounter(req);
 
         assertEquals(1002, res.getResult());
+    }
+
+    // Utilities
+    private static void addGrpcServiceAccount(String username, String password) {
+        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = newStubByAdministrator();
+
+        // Add role with authorization for REST API which is required for gRPC calling
+        AddObjectRequest addRoleRequest = AddObjectRequest.newBuilder()
+                .setObjectType(DefaultObjectType.ROLE_TYPE)
+                .setObject(PrismContainerMessage.newBuilder()
+                        .addValues(PrismContainerValueMessage.newBuilder()
+                                .putValue("name", ItemMessage.newBuilder()
+                                        .setProperty(PrismPropertyMessage.newBuilder()
+                                                .addValues(PrismPropertyValueMessage.newBuilder()
+                                                        .setPolyString(PolyStringMessage.newBuilder()
+                                                                .setOrig(GRPC_SERVICE_ROLE_NAME)
+                                                        )
+                                                )
+                                        )
+                                        .build()
+                                )
+                                .putValue("authorization", ItemMessage.newBuilder()
+                                        .setContainer(PrismContainerMessage.newBuilder()
+                                                .addValues(PrismContainerValueMessage.newBuilder()
+                                                        .putValue("action", ItemMessage.newBuilder()
+                                                                .setProperty(PrismPropertyMessage.newBuilder()
+                                                                        .addValues(PrismPropertyValueMessage.newBuilder()
+                                                                                .setString("http://midpoint.evolveum.com/xml/ns/public/security/authorization-rest-3#all")
+                                                                        )
+                                                                )
+                                                                .build()
+                                                        )
+                                                )
+                                                .addValues(PrismContainerValueMessage.newBuilder()
+                                                        .putValue("action", ItemMessage.newBuilder()
+                                                                .setProperty(PrismPropertyMessage.newBuilder()
+                                                                        .addValues(PrismPropertyValueMessage.newBuilder()
+                                                                                .setString("http://midpoint.evolveum.com/xml/ns/public/security/authorization-rest-3#proxy")
+                                                                        )
+                                                                )
+                                                                .build()
+                                                        )
+                                                        .putValue("object", ItemMessage.newBuilder()
+                                                                .setContainer(PrismContainerMessage.newBuilder()
+                                                                        .addValues(PrismContainerValueMessage.newBuilder()
+                                                                                .putValue("type", ItemMessage.newBuilder()
+                                                                                        .setProperty(PrismPropertyMessage.newBuilder()
+                                                                                                .addValues(PrismPropertyValueMessage.newBuilder()
+                                                                                                        .setString("UserType")
+                                                                                                )
+                                                                                        )
+                                                                                        .build()
+                                                                                )
+                                                                        )
+                                                                )
+                                                                .build()
+                                                        )
+                                                )
+                                        )
+                                        .build()
+                                )
+                        )
+                )
+                .build();
+        ;
+        AddObjectResponse addRoleResponse = stub.addObject(addRoleRequest);
+
+        assertNotNull(addRoleResponse.getOid());
+
+        GRPC_SERVICE_ROLE_OID = addRoleResponse.getOid();
+
+        // Add user with added role assignment
+        AddUserRequest addUserRequest = AddUserRequest.newBuilder()
+                .setProfile(UserTypeMessage.newBuilder()
+                        .setName(PolyStringMessage.newBuilder().setOrig(username))
+                        .addAssignment(AssignmentMessage.newBuilder()
+                                .setTargetRef(ReferenceMessage.newBuilder()
+                                        .setOid(addRoleResponse.getOid())
+                                        .setObjectType(DefaultObjectType.ROLE_TYPE)
+                                )
+                        )
+                )
+                .build();
+
+        AddUserResponse response = stub.addUser(addUserRequest);
+
+        assertNotNull(response.getOid());
+
+        // Save password to the service account
+        ModifyUserRequest modifyUserRequest = ModifyUserRequest.newBuilder()
+                .setOid(response.getOid())
+                .addModifications(
+                        UserItemDeltaMessage.newBuilder()
+                                .setPath("credentials/password/value")
+                                .addValuesToReplace(password)
+                                .build()
+                )
+                .build();
+
+        stub.modifyUser(modifyUserRequest);
+    }
+
+    private static String addUser(String username, String familyName, String... roleOid) {
+        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = newStubByAdministrator();
+
+        UserTypeMessage.Builder builder = UserTypeMessage.newBuilder()
+                .setName(PolyStringMessage.newBuilder().setOrig(username))
+                .setFamilyName(PolyStringMessage.newBuilder().setOrig(familyName).build());
+
+        // Role assignment
+        Arrays.stream(roleOid).forEach(oid -> {
+            builder.addAssignment(AssignmentMessage.newBuilder()
+                    .setTargetRef(ReferenceMessage.newBuilder()
+                            .setOid(oid)
+                            .setObjectType(DefaultObjectType.ROLE_TYPE)
+                    )
+            );
+        });
+
+        // Add
+        AddUserRequest addUserRequest = AddUserRequest.newBuilder()
+                .setProfile(builder)
+                .build();
+
+        AddUserResponse response = stub.addUser(addUserRequest);
+
+        assertNotNull(response.getOid());
+
+        // Save default password
+        ModifyUserRequest modifyUserRequest = ModifyUserRequest.newBuilder()
+                .setOid(response.getOid())
+                .addModifications(
+                        UserItemDeltaMessage.newBuilder()
+                                .setPath("credentials/password/value")
+                                .addValuesToReplace("password")
+                                .build()
+                )
+                .build();
+
+        stub.modifyUser(modifyUserRequest);
+
+        return response.getOid();
+    }
+
+    private static void deleteObject(DefaultObjectType type, String name) {
+        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = newStubByAdministrator();
+        stub.deleteObject(DeleteObjectRequest.newBuilder()
+                .setName(name)
+                .setObjectType(type)
+                .build());
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newStubByAdministrator() {
+        return newStub("Administrator", "5ecr3t", false);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newStub(String username, String password) {
+        return newStub(username, password, false);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newStub(String username, String password, boolean runPrivileged) {
+        return newStub(username, password, null, null, runPrivileged);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newStubWithSwitchUserByOid(String username, String password, String switchUserOid, boolean runPrivileged) {
+        return newStub(username, password, switchUserOid, null, runPrivileged);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newStubWithSwitchUserByUsername(String username, String password, String switchUsername, boolean runPrivileged) {
+        return newStub(username, password, null, switchUsername, runPrivileged);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newDefaultStubWithSwitchUserByOid(String switchUsername, boolean runPrivileged) {
+        return newStub(GRPC_SERVICE_ACCOUNT_NAME, "password", null, switchUsername, runPrivileged);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newDefaultStubWithSwitchUserByUsername(String switchUsername, boolean runPrivileged) {
+        return newStub(GRPC_SERVICE_ACCOUNT_NAME, "password", null, switchUsername, runPrivileged);
+    }
+
+    private static SelfServiceResourceGrpc.SelfServiceResourceBlockingStub newStub(String username, String password, String switchUserOid, String switchUsername, boolean runPrivileged) {
+        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub stub = SelfServiceResourceGrpc.newBlockingStub(channel);
+
+        Metadata headers = new Metadata();
+
+        final StringBuilder tmp = new StringBuilder();
+        tmp.append(username);
+        tmp.append(":");
+        tmp.append(password);
+
+        headers.put(Constant.AuthorizationMetadataKey, "Basic " +
+                Base64.getEncoder().encodeToString(tmp.toString().getBytes(Charset.forName("UTF-8"))));
+        if (switchUsername != null) {
+            headers.put(Constant.SwitchToPrincipalByNameMetadataKey, switchUsername);
+        } else if (switchUserOid != null) {
+            headers.put(Constant.SwitchToPrincipalMetadataKey, switchUserOid);
+        }
+        if (runPrivileged) {
+            headers.put(Constant.RunPrivilegedMetadataKey, "true");
+        }
+
+        SelfServiceResourceGrpc.SelfServiceResourceBlockingStub authStub = MetadataUtils.attachHeaders(stub, headers);
+
+        return authStub;
     }
 }

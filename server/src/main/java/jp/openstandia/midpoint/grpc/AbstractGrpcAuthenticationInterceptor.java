@@ -1,9 +1,8 @@
 package jp.openstandia.midpoint.grpc;
 
-import com.evolveum.midpoint.model.api.ModelService;
 import com.evolveum.midpoint.model.api.authentication.GuiProfiledPrincipal;
 import com.evolveum.midpoint.model.api.context.EvaluatedAssignment;
-import com.evolveum.midpoint.model.impl.lens.AssignmentCollector;
+import com.evolveum.midpoint.model.impl.lens.LoginAssignmentCollector;
 import com.evolveum.midpoint.model.impl.security.SecurityHelper;
 import com.evolveum.midpoint.prism.PrismContext;
 import com.evolveum.midpoint.prism.PrismObject;
@@ -58,9 +57,6 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
     PrismContext prismContext;
 
     @Autowired
-    ModelService modelService;
-
-    @Autowired
     SecurityEnforcer securityEnforcer;
 
     @Autowired
@@ -70,7 +66,7 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
     TaskManager taskManager;
 
     @Autowired
-    AssignmentCollector assignmentCollector;
+    LoginAssignmentCollector assignmentCollector;
 
     @Override
     public <ReqT, RespT> ServerCall.Listener<ReqT> interceptCall(ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
@@ -135,7 +131,7 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
 
         // Run Privileged
         if (runPrivileged) {
-            auth = runPrivileged(auth);
+            auth = runPrivileged(user);
         }
 
         OperationResult result = task.getResult().createSubresult("grpcService");
@@ -181,32 +177,17 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
         return task.getResult().createSubresult(opNamePrefix + operation);
     }
 
-    private Authentication runPrivileged(Authentication origAuthentication) {
+    private Authentication runPrivileged(FocusType user) {
         LOGGER.debug("Running gRPC service as privileged");
-        LOGGER.trace("ORIG auth {}", origAuthentication);
-        Authorization privilegedAuthorization = createPrivilegedAuthorization();
-        Object newPrincipal = null;
-        Object origPrincipal;
-
-        origPrincipal = origAuthentication.getPrincipal();
-
-        LOGGER.trace("ORIG principal {} ({})", origPrincipal, origPrincipal != null ? origPrincipal.getClass() : null);
-        MidPointPrincipal newMidPointPrincipal = ((MidPointPrincipal) origPrincipal).clone();
-        newMidPointPrincipal.getAuthorities().add(privilegedAuthorization);
-        newPrincipal = newMidPointPrincipal;
+        Authorization privilegedAuthorization = SecurityUtil.createPrivilegedAuthorization();
+        MidPointPrincipal newMidPointPrincipal = MidPointPrincipal.privileged(user);
 
         Collection<GrantedAuthority> newAuthorities = new ArrayList();
         newAuthorities.add(privilegedAuthorization);
-        PreAuthenticatedAuthenticationToken newAuthorization = new PreAuthenticatedAuthenticationToken(newPrincipal, (Object) null, newAuthorities);
+        PreAuthenticatedAuthenticationToken newAuthorization = new PreAuthenticatedAuthenticationToken(newMidPointPrincipal, (Object) null, newAuthorities);
         LOGGER.trace("NEW auth {}", newAuthorization);
 
         return newAuthorization;
-    }
-
-    private Authorization createPrivilegedAuthorization() {
-        AuthorizationType authorizationType = new AuthorizationType();
-        authorizationType.getAction().add(AuthorizationConstants.AUTZ_ALL_URL);
-        return new Authorization(authorizationType);
     }
 
     protected abstract String getType();
@@ -228,12 +209,12 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
 
             // Don't need to collect authorization if running privileged mode
             if (!runPrivileged) {
-                Collection<? extends EvaluatedAssignment<? extends FocusType>> evaluatedAssignments = assignmentCollector.collect(user, true, task, task.getResult());
+                Collection<? extends EvaluatedAssignment> evaluatedAssignments = assignmentCollector.collect(user, task, task.getResult());
                 Collection<Authorization> authorizations = principal.getAuthorities();
-                for (EvaluatedAssignment<? extends FocusType> assignment : evaluatedAssignments) {
+                for (EvaluatedAssignment assignment : evaluatedAssignments) {
                     if (assignment.isValid()) {
                         for (Authorization autz : assignment.getAuthorizations()) {
-                            authorizations.add(autz.clone());
+                            principal.addAuthorization(autz.clone());
                         }
                     }
                 }
@@ -250,6 +231,12 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
                     .withDescription(e.getMessage())
                     .asRuntimeException();
             throw exception;
+        } catch (ConfigurationException e) {
+            securityHelper.auditLoginFailure(user.getName().getOrig(), user.asObjectable(), connEnv, "Configuration error: " + e.getMessage());
+            StatusRuntimeException exception = Status.INVALID_ARGUMENT
+                    .withDescription(e.getMessage())
+                    .asRuntimeException();
+            throw exception;
         }
     }
 
@@ -260,7 +247,7 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
             SecurityContextHolder.getContext().setAuthentication(auth);
 
             // authorize for proxy
-            securityEnforcer.authorize(authorization, null, AuthorizationParameters.Builder.buildObject(proxyUser), null, task, task.getResult());
+            securityEnforcer.authorize(authorization, null, AuthorizationParameters.Builder.buildObject(proxyUser), SecurityEnforcer.Options.create(), task, task.getResult());
         } catch (SecurityViolationException e) {
             securityHelper.auditLoginFailure(user.getName().getOrig(), user, connEnv, "Not authorized");
             throw Status.PERMISSION_DENIED
@@ -281,9 +268,9 @@ public abstract class AbstractGrpcAuthenticationInterceptor implements ServerInt
         try {
             SecurityContextHolder.getContext().setAuthentication(auth);
 
-            PrismObject<UserType> user = modelService.getObject(UserType.class, oid, null, task, result);
+            PrismObject<UserType> user = GrpcServerConfiguration.getApplication().getRepositoryService().getObject(UserType.class, oid, null, result);
             return user;
-        } catch (SchemaException | ObjectNotFoundException | SecurityViolationException | CommunicationException | ConfigurationException | ExpressionEvaluationException e) {
+        } catch (SchemaException | ObjectNotFoundException e) {
             LOGGER.trace("Exception while authenticating user identified with oid: '{}' to gRPC service: {}", oid, e.getMessage(), e);
             throw Status.UNAUTHENTICATED
                     .withDescription(e.getMessage())

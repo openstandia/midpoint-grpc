@@ -393,7 +393,7 @@ public class TypeConverter {
     public static ObjectQuery toObjectQuery(PrismContext prismContext, Class<? extends Containerable> queryClass,
                                             QueryMessage message) {
         S_FilterEntryOrEmpty builder = QueryBuilder.queryFor(queryClass, prismContext);
-        S_AtomicFilterExit exitFilter = toObjectFilter(prismContext, builder, message.getFilter());
+        S_FilterExit exitFilter = toObjectFilter(prismContext, builder, message.getFilter());
 
         S_QueryExit exitBuilder;
         if (exitFilter != null) {
@@ -458,7 +458,7 @@ public class TypeConverter {
         return OrderDirection.ASCENDING;
     }
 
-    public static S_AtomicFilterExit toObjectFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, ObjectFilterMessage message) {
+    public static S_FilterExit toObjectFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, ObjectFilterMessage message) {
         if (message.hasAnd()) {
             return toAndQuery(prismContext, builder, message.getAnd());
         } else if (message.hasOr()) {
@@ -499,7 +499,7 @@ public class TypeConverter {
         return null;
     }
 
-    public static S_AtomicFilterExit toObjectFilter(PrismContext prismContext, S_FilterEntry builder, ObjectFilterMessage message) {
+    public static S_FilterExit toObjectFilter(PrismContext prismContext, S_FilterEntry builder, ObjectFilterMessage message) {
         if (message.hasAnd()) {
             return toAndQuery(prismContext, builder, message.getAnd());
         } else if (message.hasOr()) {
@@ -530,7 +530,7 @@ public class TypeConverter {
         }).collect(Collectors.toList()));
     }
 
-    public static S_AtomicFilterExit toEqFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    public static S_FilterExit toEqFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .eq(message.getValue());
 
@@ -540,7 +540,7 @@ public class TypeConverter {
         return filter;
     }
 
-    public static S_AtomicFilterExit toStartsWithFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    public static S_FilterExit toStartsWithFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .startsWith(message.getValue());
 
@@ -550,7 +550,7 @@ public class TypeConverter {
         return filter;
     }
 
-    private static S_AtomicFilterExit toContainsFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    private static S_FilterExit toContainsFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .contains(message.getValue());
 
@@ -560,7 +560,7 @@ public class TypeConverter {
         return filter;
     }
 
-    public static S_AtomicFilterExit toEndsWithFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    public static S_FilterExit toEndsWithFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .endsWith(message.getValue());
 
@@ -570,7 +570,7 @@ public class TypeConverter {
         return filter;
     }
 
-    public static S_AtomicFilterExit toEqPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    public static S_FilterExit toEqPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .eqPoly(message.getValue());
 
@@ -580,7 +580,7 @@ public class TypeConverter {
         return filter;
     }
 
-    public static S_AtomicFilterExit toStartsWithPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    public static S_FilterExit toStartsWithPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .startsWithPoly(message.getValue());
 
@@ -590,7 +590,7 @@ public class TypeConverter {
         return filter;
     }
 
-    private static S_AtomicFilterExit toContainsPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    private static S_FilterExit toContainsPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .containsPoly(message.getValue());
 
@@ -600,7 +600,7 @@ public class TypeConverter {
         return filter;
     }
 
-    public static S_AtomicFilterExit toEndsWithPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
+    public static S_FilterExit toEndsWithPolyFilter(S_FilterEntryOrEmpty builder, FilterEntryMessage message) {
         S_MatchingRuleEntry filter = builder.item(toItemPath(message))
                 .endsWithPoly(message.getValue());
 
@@ -610,12 +610,12 @@ public class TypeConverter {
         return filter;
     }
 
-    public static S_AtomicFilterExit toAndQuery(PrismContext prismContext, S_FilterEntry builder, AndFilterMessage message) {
+    public static S_FilterExit toAndQuery(PrismContext prismContext, S_FilterEntry builder, AndFilterMessage message) {
         List<ObjectFilterMessage> list = message.getConditionsList();
 
         for (int i = 0; i < list.size(); i++) {
             ObjectFilterMessage filter = list.get(i);
-            S_AtomicFilterExit f = toObjectFilter(prismContext, builder, filter);
+            S_FilterExit f = toObjectFilter(prismContext, builder, filter);
 
             if (i < list.size() - 1) {
                 builder = f.and();
@@ -626,12 +626,12 @@ public class TypeConverter {
         return null;
     }
 
-    public static S_AtomicFilterExit toOrQuery(PrismContext prismContext, S_FilterEntry builder, OrFilterMessage message) {
+    public static S_FilterExit toOrQuery(PrismContext prismContext, S_FilterEntry builder, OrFilterMessage message) {
         List<ObjectFilterMessage> list = message.getConditionsList();
 
         for (int i = 0; i < list.size(); i++) {
             ObjectFilterMessage filter = list.get(i);
-            S_AtomicFilterExit f = toObjectFilter(prismContext, builder, filter);
+            S_FilterExit f = toObjectFilter(prismContext, builder, filter);
 
             if (i < list.size() - 1) {
                 builder = f.or();
@@ -642,10 +642,10 @@ public class TypeConverter {
         return null;
     }
 
-    public static S_AtomicFilterExit toNotQuery(PrismContext prismContext, S_FilterEntryOrEmpty builder, NotFilterMessage message) {
-        S_AtomicFilterEntry not = builder.not();
+    public static S_FilterExit toNotQuery(PrismContext prismContext, S_FilterEntryOrEmpty builder, NotFilterMessage message) {
+        S_FilterEntry not = builder.not();
         S_FilterEntryOrEmpty block = not.block();
-        S_AtomicFilterExit q = toObjectFilter(prismContext, block, message.getFilter());
+        S_FilterExit q = toObjectFilter(prismContext, block, message.getFilter());
         return q.endBlock();
     }
 
@@ -691,17 +691,17 @@ public class TypeConverter {
         }
     }
 
-    public static S_AtomicFilterExit toInOidFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterInOidMessage message) {
+    public static S_FilterExit toInOidFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterInOidMessage message) {
         return builder.id(message.getValueList().toArray(new String[0]));
     }
 
-    public static S_AtomicFilterExit toRefFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterReferenceMessage message) {
+    public static S_FilterExit toRefFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterReferenceMessage message) {
         ObjectReferenceType ref = toObjectReferenceTypeValue(prismContext, message.getValue());
         return builder.item(toItemPath(message))
                 .ref(ref.asReferenceValue());
     }
 
-    public static S_AtomicFilterExit toOrgRootFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterOrgRootMessage message) {
+    public static S_FilterExit toOrgRootFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterOrgRootMessage message) {
         if (message.getIsRoot()) {
             return builder.isRoot();
         }
@@ -710,7 +710,7 @@ public class TypeConverter {
         return builder.undefined();
     }
 
-    public static S_AtomicFilterExit toOrgRefFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterOrgReferenceMessage message) {
+    public static S_FilterExit toOrgRefFilter(PrismContext prismContext, S_FilterEntryOrEmpty builder, FilterOrgReferenceMessage message) {
         ObjectReferenceType ref = toObjectReferenceTypeValue(prismContext, message.getValue());
         return builder.isInScopeOf(ref.asReferenceValue(), toOrgFilterScope(message.getScope()));
     }
@@ -986,7 +986,7 @@ public class TypeConverter {
         // ObjectType
         user.setName(toPolyStringTypeValue(message.getName()));
         user.setDescription(toStringValue(message.getDescription()));
-        user.createSubtypeList().addAll(message.getSubtypeList());
+        user.getSubtype().addAll(message.getSubtypeList());
         user.setLifecycleState(toStringValue(message.getLifecycleState()));
 
         // AssignmentHolderType
@@ -1013,8 +1013,8 @@ public class TypeConverter {
         user.setHonorificSuffix(toPolyStringTypeValue(message.getHonorificSuffix()));
         user.setTitle(toPolyStringTypeValue(message.getTitle()));
         user.setEmployeeNumber(toStringValue(message.getEmployeeNumber()));
-        user.createOrganizationList().addAll(toPolyStringTypeValueList(message.getOrganizationList()));
-        user.createOrganizationalUnitList().addAll(toPolyStringTypeValueList(message.getOrganizationalUnitList()));
+        user.getOrganization().addAll(toPolyStringTypeValueList(message.getOrganizationList()));
+        user.getOrganizationalUnit().addAll(toPolyStringTypeValueList(message.getOrganizationalUnitList()));
 
         // Extension
         addExtensionType(prismContext, user, message.getExtensionMap());
@@ -1028,7 +1028,7 @@ public class TypeConverter {
         // ObjectType
         object.setName(toPolyStringTypeValue(message.getName()));
         object.setDescription(toStringValue(message.getDescription()));
-        object.createSubtypeList().addAll(message.getSubtypeList());
+        object.getSubtype().addAll(message.getSubtypeList());
         object.setLifecycleState(toStringValue(message.getLifecycleState()));
 
         // AssignmentHolderType
@@ -1067,7 +1067,7 @@ public class TypeConverter {
         // ObjectType
         object.setName(toPolyStringTypeValue(message.getName()));
         object.setDescription(toStringValue(message.getDescription()));
-        object.createSubtypeList().addAll(message.getSubtypeList());
+        object.getSubtype().addAll(message.getSubtypeList());
         object.setLifecycleState(toStringValue(message.getLifecycleState()));
 
         // AssignmentHolderType
@@ -1094,7 +1094,7 @@ public class TypeConverter {
         // OrgType
 //        object.createOrgTypeList().addAll(message.getOrgTypeList());
         object.setTenant(toBooleanValue(message.getTenant()));
-        object.createMailDomainList().addAll(message.getMailDomainList());
+        object.getSubtype().addAll(message.getMailDomainList());
         object.setDisplayOrder(toIntValue(message.getDisplayOrder()));
 
         // Extension
@@ -1109,7 +1109,7 @@ public class TypeConverter {
         // ObjectType
         object.setName(toPolyStringTypeValue(message.getName()));
         object.setDescription(toStringValue(message.getDescription()));
-        object.createSubtypeList().addAll(message.getSubtypeList());
+        object.getSubtype().addAll(message.getSubtypeList());
         object.setLifecycleState(toStringValue(message.getLifecycleState()));
 
         // AssignmentHolderType
@@ -1177,13 +1177,15 @@ public class TypeConverter {
             throw exception;
         }
 
+        PrismObject<? extends ObjectType> prismObject = objectType.asPrismObject();
+
         if (values.size() > 0) {
             // Convert PrismContainerValueMessage to PrismObjectValue
             PrismObjectValue prismObjectValue = toPrismObjectValue(prismContext, definition, values.get(0), objectType);
-            instantiate.setValue(prismObjectValue);
+            prismObject.setValue(prismObjectValue);
         }
 
-        return objectType.asPrismObject();
+        return prismObject;
     }
 
     private static List<PolyStringType> toPolyStringTypeValueList(List<PolyStringMessage> organizationList) {
@@ -1488,7 +1490,7 @@ public class TypeConverter {
             // Currently, it doesn't use namespaceURI as the key
             String key = definition.getItemName().getLocalPart();
 
-            if (!SelectorOptions.hasToLoadPath(item.getPath(), options, !hasInclude)) {
+            if (!SelectorOptions.hasToIncludePath(item.getPath(), options, !hasInclude)) {
                 continue;
             }
 
@@ -1517,7 +1519,7 @@ public class TypeConverter {
         }
 
         for (Item<?, ?> item : value.getItems()) {
-            if (!SelectorOptions.hasToLoadPath(item.getPath(), options, !hasInclude)) {
+            if (!SelectorOptions.hasToIncludePath(item.getPath(), options, !hasInclude)) {
                 continue;
             }
 
@@ -1547,7 +1549,7 @@ public class TypeConverter {
                 .setOid(prismObject.getOid());
 
         for (Item item : prismObject.getValue().getItems()) {
-            if (!SelectorOptions.hasToLoadPath(item.getPath(), options, !hasInclude)) {
+            if (!SelectorOptions.hasToIncludePath(item.getPath(), options, !hasInclude)) {
                 continue;
             }
             builder.putValue(item.getElementName().getLocalPart(), toItemMessage(item.getDefinition(), item, options, hasInclude));

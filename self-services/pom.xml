@@ -23,8 +23,6 @@
         <dependency>
             <groupId>com.evolveum.midpoint.gui</groupId>
             <artifactId>admin-gui</artifactId>
-            <type>jar</type>
-            <classifier>classes</classifier>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -37,6 +35,11 @@
             <artifactId>protobuf-java</artifactId>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -46,19 +49,6 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>net.tirasa.connid</groupId>
-            <artifactId>connector-framework</artifactId>
-            <version>1.5.0.18</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>net.tirasa.connid</groupId>
-            <artifactId>connector-framework-internal</artifactId>
-            <version>1.5.0.18</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

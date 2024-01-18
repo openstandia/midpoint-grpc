@@ -50,12 +50,18 @@
     </distributionManagement>
 
     <properties>
-        <version.midpoint>4.4</version.midpoint>
-        <version.spring-boot>2.5.2</version.spring-boot>
-        <version.grpc-java>1.42.0</version.grpc-java>
-        <version.protoc>3.10.0</version.protoc>
+        <version.midpoint>4.8</version.midpoint>
+        <version.grpc-java>1.55.1</version.grpc-java>
+        <version.protoc>3.22.3</version.protoc>
+        <!--
+            The version of Spring Boot that midpoint depends on must match the major version of Spring Boot that grpc-spring-boot-starter depends on.
 
-        <java.version>1.8</java.version>
+            https://github.com/Evolveum/midpoint/blob/support-4.8/pom.xml
+            https://central.sonatype.com/artifact/io.github.lognet/grpc-spring-boot-starter/4.5.10
+        -->
+        <version.grpc-spring-boot-starter>5.1.2</version.grpc-spring-boot-starter>
+
+        <java.version>17</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.jupiter.version>5.8.1</junit.jupiter.version>
 
@@ -92,7 +98,7 @@
             <dependency>
                 <groupId>io.github.lognet</groupId>
                 <artifactId>grpc-spring-boot-starter</artifactId>
-                <version>4.5.10</version>
+                <version>${version.grpc-spring-boot-starter}</version>
                 <exclusions>
                     <exclusion>
                         <groupId>org.springframework.boot</groupId>
@@ -112,34 +118,20 @@
                 <groupId>com.evolveum.midpoint.gui</groupId>
                 <artifactId>admin-gui</artifactId>
                 <version>${version.midpoint}</version>
-                <type>jar</type>
-                <classifier>classes</classifier>
             </dependency>
             <dependency>
                 <groupId>com.google.protobuf</groupId>
                 <artifactId>protobuf-java</artifactId>
                 <version>${version.protoc}</version>
             </dependency>
-
-            <!-- OAuth2.0 -->
+            <!--
+                For grpc-java
+                https://github.com/grpc/grpc-java/issues/5343
+            -->
             <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
-                <version>${version.spring-boot}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>org.springframework.boot</groupId>
-                        <artifactId>spring-boot-starter</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.springframework.security</groupId>
-                        <artifactId>spring-security-config</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.springframework.security</groupId>
-                        <artifactId>spring-security-core</artifactId>
-                    </exclusion>
-                </exclusions>
+                <groupId>javax.annotation</groupId>
+                <artifactId>javax.annotation-api</artifactId>
+                <version>1.3.2</version>
             </dependency>
 
             <!-- For client-spi -->
@@ -251,7 +243,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-shade-plugin</artifactId>
-                    <version>3.2.1</version>
+                    <version>3.5.1</version>
                 </plugin>
                 <plugin>
                     <artifactId>maven-deploy-plugin</artifactId>
